@@ -5,6 +5,7 @@ import { BUILDERS, type BuildCtx } from "./build.ts";
 import { tessellate } from "./tess.ts";
 import { bboxOf, centroidOf, countEdges, countFaces, volumeOf } from "./occ.ts";
 import { resolveSelector, type Selection } from "./selectors.ts";
+import { consumedSolids } from "../ops/effects.ts";
 
 /**
  * SPEC §6 -- topological evaluation with memoisation.
@@ -20,7 +21,8 @@ import { resolveSelector, type Selection } from "./selectors.ts";
 export interface SolidPayload {
   id: string;
   node: string;
-  tess: Tess;
+  /** null means "unchanged since the last evaluation, reuse what you have" */
+  tess: Tess | null;
   tags: string[];
   metrics: SolidMetrics;
 }
@@ -70,6 +72,8 @@ export class Evaluator {
   private frames: Frame[] = [];
   private strokeHash = "";
   private last: Env = new Map();
+  /** shape last tessellated and sent per solid id, so unchanged solids are not re-meshed */
+  private sent = new Map<string, Shape>();
 
   constructor(private oc: OC) {}
 
@@ -126,14 +130,17 @@ export class Evaluator {
 
     const solids: SolidPayload[] = [];
     for (const [id, live] of env) {
+      const unchanged = this.sent.get(id) === live.shape;
+      if (!unchanged) this.sent.set(id, live.shape);
       solids.push({
         id,
         node: live.node,
         tags: live.tags,
-        tess: tessellate(this.oc, live.shape),
+        tess: unchanged ? null : tessellate(this.oc, live.shape),
         metrics: this.metrics(live.shape),
       });
     }
+    for (const id of [...this.sent.keys()]) if (!env.has(id)) this.sent.delete(id);
     return { nodes: reports, solids, kernelCalls };
   }
 
@@ -179,7 +186,7 @@ export class Evaluator {
         return { id: node.id, state: "ok", outputs: [] };
       }
 
-      for (const id of out.consumes ?? []) env.delete(id);
+      for (const id of consumedSolids(node.op, node.params)) env.delete(id);
 
       const ids: string[] = [];
       out.shapes.forEach((shape, i) => {

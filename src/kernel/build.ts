@@ -46,8 +46,6 @@ export interface BuildCtx {
 export interface BuildResult {
   shapes: Shape[];
   tags?: string[];
-  /** solid ids this op removes from the model */
-  consumes?: string[];
 }
 
 export type Builder = (ctx: BuildCtx, p: Record<string, any>) => BuildResult;
@@ -360,7 +358,7 @@ export const BUILDERS: Record<string, Builder> = {
 
   boolean(ctx, p) {
     const r = boolOp(ctx.oc, ctx.scope, p.kind, ctx.shape(p.a), ctx.shape(p.b));
-    return { shapes: [r], consumes: [p.a, p.b], tags: ctx.tagsOf(p.a) };
+    return { shapes: [r], tags: ctx.tagsOf(p.a) };
   },
 
   fillet(ctx, p) {
@@ -379,7 +377,7 @@ export const BUILDERS: Record<string, Builder> = {
     for (const e of picked) mk.Add_2(radius, oc.TopoDS.Edge_1(e));
     mk.Build(scope.t(progress(oc)));
     if (!mk.IsDone()) throw new Error("fillet failed -- try a smaller radius");
-    return { shapes: [mk.Shape()], consumes: [ref.solid], tags: ctx.tagsOf(ref.solid) };
+    return { shapes: [mk.Shape()], tags: ctx.tagsOf(ref.solid) };
   },
 
   chamfer(ctx, p) {
@@ -392,7 +390,7 @@ export const BUILDERS: Record<string, Builder> = {
     for (const e of picked) mk.Add_2(dist, oc.TopoDS.Edge_1(e));
     mk.Build(scope.t(progress(oc)));
     if (!mk.IsDone()) throw new Error("chamfer failed -- try a smaller distance");
-    return { shapes: [mk.Shape()], consumes: [ref.solid], tags: ctx.tagsOf(ref.solid) };
+    return { shapes: [mk.Shape()], tags: ctx.tagsOf(ref.solid) };
   },
 
   shell(ctx, p) {
@@ -415,7 +413,7 @@ export const BUILDERS: Record<string, Builder> = {
     );
     mk.Build(scope.t(progress(oc)));
     if (!mk.IsDone()) throw new Error("shell failed -- the wall may be thicker than the solid");
-    return { shapes: [mk.Shape()], consumes: [p.solid], tags: [...ctx.tagsOf(p.solid), "shelled"] };
+    return { shapes: [mk.Shape()], tags: [...ctx.tagsOf(p.solid), "shelled"] };
   },
 
   offset_solid(ctx, p) {
@@ -434,7 +432,7 @@ export const BUILDERS: Record<string, Builder> = {
     );
     mk.Build(scope.t(progress(oc)));
     if (!mk.IsDone()) throw new Error("offset failed -- try a smaller distance");
-    return { shapes: [mk.Shape()], consumes: [p.solid], tags: ctx.tagsOf(p.solid) };
+    return { shapes: [mk.Shape()], tags: ctx.tagsOf(p.solid) };
   },
 
   cut_plane(ctx, p) {
@@ -445,12 +443,11 @@ export const BUILDERS: Record<string, Builder> = {
       const tool = halfBox(ctx, bb, p.plane, p.offset, true);
       const a = boolOp(oc, scope, "intersect", target, tool);
       const b = boolOp(oc, scope, "subtract", target, tool);
-      return { shapes: [a, b], consumes: [p.solid], tags: ctx.tagsOf(p.solid) };
+      return { shapes: [a, b], tags: ctx.tagsOf(p.solid) };
     }
     const tool = halfBox(ctx, bb, p.plane, p.offset, p.keep === "below");
     return {
       shapes: [boolOp(oc, scope, "intersect", target, tool)],
-      consumes: [p.solid],
       tags: ctx.tagsOf(p.solid),
     };
   },
@@ -461,7 +458,7 @@ export const BUILDERS: Record<string, Builder> = {
     const b = ctx.shape(p.b);
     const inside = boolOp(oc, scope, "intersect", a, b);
     const outside = boolOp(oc, scope, "subtract", a, b);
-    return { shapes: [inside, outside], consumes: [p.a], tags: ctx.tagsOf(p.a) };
+    return { shapes: [inside, outside], tags: ctx.tagsOf(p.a) };
   },
 
   push_pull(ctx, p) {
@@ -480,7 +477,7 @@ export const BUILDERS: Record<string, Builder> = {
     const out = d >= 0
       ? boolOp(oc, scope, "union", target, tool)
       : boolOp(oc, scope, "subtract", target, flipped);
-    return { shapes: [out], consumes: [ref.solid], tags: ctx.tagsOf(ref.solid) };
+    return { shapes: [out], tags: ctx.tagsOf(ref.solid) };
   },
 
   mirror(ctx, p) {
@@ -520,7 +517,6 @@ export const BUILDERS: Record<string, Builder> = {
   move(ctx, p) {
     return {
       shapes: [translateCopy(ctx, ctx.shape(p.solid), [p.dx ?? 0, p.dy ?? 0, p.dz ?? 0])],
-      consumes: [p.solid],
       tags: ctx.tagsOf(p.solid),
     };
   },
@@ -533,7 +529,7 @@ export const BUILDERS: Record<string, Builder> = {
     const dirv: Vec3 = axis === "x" ? [1, 0, 0] : axis === "y" ? [0, 1, 0] : [0, 0, 1];
     const t = scope.t(new oc.gp_Trsf_1());
     t.SetRotation_1(scope.t(ax1(oc, c, dirv)), ((p.angle as number) * Math.PI) / 180);
-    return { shapes: [transformed(oc, scope, src, t)], consumes: [p.solid], tags: ctx.tagsOf(p.solid) };
+    return { shapes: [transformed(oc, scope, src, t)], tags: ctx.tagsOf(p.solid) };
   },
 
   scale(ctx, p) {
@@ -542,7 +538,7 @@ export const BUILDERS: Record<string, Builder> = {
     const c = centroidOf(oc, src);
     const t = scope.t(new oc.gp_Trsf_1());
     t.SetScale(scope.t(pnt(oc, c)), p.factor as number);
-    return { shapes: [transformed(oc, scope, src, t)], consumes: [p.solid], tags: ctx.tagsOf(p.solid) };
+    return { shapes: [transformed(oc, scope, src, t)], tags: ctx.tagsOf(p.solid) };
   },
 
   duplicate(ctx, p) {
@@ -551,8 +547,8 @@ export const BUILDERS: Record<string, Builder> = {
     return { shapes: [copy], tags: ctx.tagsOf(p.solid) };
   },
 
-  delete(_ctx, p) {
-    return { shapes: [], consumes: [p.solid] };
+  delete() {
+    return { shapes: [] };
   },
 
   tag(ctx, p) {
