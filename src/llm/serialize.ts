@@ -2,6 +2,9 @@ import type { Doc, Solid, Stroke } from "../core/types.ts";
 import { liveSolids } from "../graph/model.ts";
 import { opDef } from "../ops/registry.ts";
 
+/** The serializer needs measurements, not meshes. */
+export type SolidFacts = Pick<Solid, "id" | "tags" | "metrics">;
+
 /**
  * SPEC §9.3 -- the scene as compact text tables. The model never sees raw
  * coordinates it could copy; it sees ids, shapes, sizes and history, which is
@@ -46,7 +49,7 @@ function paramSummary(op: string, params: Record<string, unknown>): string {
   return parts.join(" ");
 }
 
-export function serializeScene(doc: Doc, solids: Solid[], userSays: string): string {
+export function serializeScene(doc: Doc, solids: SolidFacts[], userSays: string): string {
   const out: string[] = [];
 
   out.push("STROKES");

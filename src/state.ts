@@ -1,7 +1,8 @@
 import type { Doc, OpNode, PlaneKey, Solid, Stroke } from "./core/types.ts";
 import type { NodeReport } from "./kernel/evaluate.ts";
 import { kernel, type KernelProgress } from "./kernel/api.ts";
-import { applyOp } from "./graph/model.ts";
+import { applyOp, nextStrokeId } from "./graph/model.ts";
+import { recomputeMetrics } from "./sketch/geom.ts";
 
 export type ViewKey = "iso" | "top" | "front" | "side";
 export type Tool = "draw" | "select" | "erase" | "pushpull";
@@ -68,6 +69,17 @@ function initialState(): AppState {
   };
 }
 
+/** Drop selected ids that the new document no longer contains. */
+function prune(selection: Selection, doc: Doc): Selection {
+  const strokes = new Set(doc.strokes.map((s) => s.id));
+  const nodes = new Set(doc.nodes.map((n) => n.id));
+  return {
+    strokes: selection.strokes.filter((id) => strokes.has(id)),
+    solids: selection.solids,
+    node: selection.node && nodes.has(selection.node) ? selection.node : null,
+  };
+}
+
 type Listener = (s: AppState) => void;
 
 class Store {
@@ -75,8 +87,10 @@ class Store {
   private listeners = new Set<Listener>();
   private past: Doc[] = [];
   private future: Doc[] = [];
-  private evalSeq = 0;
   private pendingEval: number | null = null;
+  private running: Promise<void> | null = null;
+  private queued = false;
+  private gestureBase: Doc | null = null;
 
   get(): AppState {
     return this.state;
@@ -121,7 +135,7 @@ class Store {
       if (this.past.length > 200) this.past.shift();
       this.future.length = 0;
     }
-    this.state = { ...this.state, doc: next };
+    this.state = { ...this.state, doc: next, selection: prune(this.state.selection, next) };
     this.emit();
     this.scheduleEvaluate();
   }
@@ -135,6 +149,80 @@ class Store {
       ...this.state.doc,
       strokes: this.state.doc.strokes.map((s) => (s.id === id ? fn(s) : s)),
     });
+  }
+
+  /**
+   * A pointer gesture (dragging strokes about) makes many document versions but
+   * should be one undo step, so the base version is held until the pointer is
+   * released.
+   */
+  beginGesture(): void {
+    this.gestureBase = this.state.doc;
+  }
+
+  endGesture(): void {
+    const base = this.gestureBase;
+    this.gestureBase = null;
+    if (!base || base === this.state.doc) return;
+    this.past.push(base);
+    if (this.past.length > 200) this.past.shift();
+    this.future.length = 0;
+  }
+
+  /** Move strokes within their own plane (SPEC §5.4). */
+  moveStrokes(ids: string[], da: number, db: number, opts: { silent?: boolean } = {}): void {
+    const set = new Set(ids);
+    this.commit(
+      {
+        ...this.state.doc,
+        strokes: this.state.doc.strokes.map((s) =>
+          set.has(s.id)
+            ? recomputeMetrics({ ...s, pts: s.pts.map((p) => ({ ...p, a: p.a + da, b: p.b + db })) })
+            : s,
+        ),
+      },
+      opts,
+    );
+  }
+
+  /** Re-level: same outline, different height along its plane normal. */
+  relevelStrokes(ids: string[], offset: number): void {
+    const set = new Set(ids);
+    this.commit({
+      ...this.state.doc,
+      strokes: this.state.doc.strokes.map((s) =>
+        set.has(s.id) ? recomputeMetrics({ ...s, offset }) : s,
+      ),
+    });
+  }
+
+  duplicateStrokes(ids: string[]): string[] {
+    const set = new Set(ids);
+    const source = this.state.doc.strokes.filter((s) => set.has(s.id));
+    if (!source.length) return [];
+    let strokes = [...this.state.doc.strokes];
+    const made: string[] = [];
+    for (const s of source) {
+      const id = nextStrokeId(strokes);
+      made.push(id);
+      strokes = [
+        ...strokes,
+        recomputeMetrics({
+          ...s,
+          id,
+          order: strokes.length,
+          pts: s.pts.map((p) => ({ ...p, a: p.a + 1, b: p.b - 1 })),
+        }),
+      ];
+    }
+    this.commit({ ...this.state.doc, strokes });
+    this.select({ strokes: made });
+    return made;
+  }
+
+  /** Per-stroke "as drawn / as fit" toggle (SPEC §5.3). */
+  toggleFit(id: string): void {
+    this.updateStroke(id, (s) => (s.raw ? { ...s, fitted: s.fitted === false } : s));
   }
 
   removeStrokes(ids: string[]): void {
@@ -180,7 +268,7 @@ class Store {
     const prev = this.past.pop();
     if (!prev) return;
     this.future.push(this.state.doc);
-    this.state = { ...this.state, doc: prev, ghosts: [] };
+    this.state = { ...this.state, doc: prev, ghosts: [], selection: prune(this.state.selection, prev) };
     this.emit();
     this.scheduleEvaluate();
   }
@@ -189,7 +277,7 @@ class Store {
     const next = this.future.pop();
     if (!next) return;
     this.past.push(this.state.doc);
-    this.state = { ...this.state, doc: next, ghosts: [] };
+    this.state = { ...this.state, doc: next, ghosts: [], selection: prune(this.state.selection, next) };
     this.emit();
     this.scheduleEvaluate();
   }
@@ -205,8 +293,28 @@ class Store {
     });
   }
 
+  /**
+   * Exactly one evaluation is ever in flight. The worker skips re-meshing a
+   * solid whose shape has not changed, which only works if the main thread
+   * kept the mesh it was last sent -- so a superseded request must never be
+   * thrown away mid-flight. Overlapping requests coalesce into one re-run.
+   */
   async evaluate(): Promise<void> {
-    const seq = ++this.evalSeq;
+    if (this.running) {
+      this.queued = true;
+      return this.running;
+    }
+    this.running = this.runEvaluation().finally(() => {
+      this.running = null;
+    });
+    await this.running;
+    if (this.queued) {
+      this.queued = false;
+      await this.evaluate();
+    }
+  }
+
+  private async runEvaluation(): Promise<void> {
     const { doc } = this.state;
     if (!doc.nodes.length) {
       this.patch({ solids: [], reports: [] });
@@ -214,23 +322,26 @@ class Store {
     }
     try {
       const result = await kernel().evaluate(doc.nodes, doc.strokes);
-      if (seq !== this.evalSeq) return;
       const previous = new Map(this.state.solids.map((s) => [s.id, s]));
-      const solids: Solid[] = result.solids.map((s) => ({
-        id: s.id,
-        node: s.node,
-        tags: s.tags,
-        metrics: s.metrics,
-        tess: s.tess ?? previous.get(s.id)!.tess,
-      }));
-      const nodes = doc.nodes.map((n) => {
+      const solids: Solid[] = [];
+      for (const s of result.solids) {
+        const tess = s.tess ?? previous.get(s.id)?.tess;
+        if (!tess) continue;
+        solids.push({ id: s.id, node: s.node, tags: s.tags, metrics: s.metrics, tess });
+      }
+      const nodes = this.state.doc.nodes.map((n) => {
         const r = result.nodes.find((x) => x.id === n.id);
         return r ? { ...n, state: r.state, error: r.error } : n;
       });
-      this.state = { ...this.state, doc: { ...doc, nodes }, solids, reports: result.nodes, error: null };
+      this.state = {
+        ...this.state,
+        doc: { ...this.state.doc, nodes },
+        solids,
+        reports: result.nodes,
+        error: null,
+      };
       this.emit();
     } catch (err) {
-      if (seq !== this.evalSeq) return;
       this.patch({ error: err instanceof Error ? err.message : String(err) });
     }
   }

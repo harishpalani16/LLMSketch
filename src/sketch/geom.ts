@@ -101,7 +101,13 @@ export function resample(pts: Pt2[], n: number, closed = false): Pt2[] {
  */
 export function alignRings(rings: Pt2[][], n = 64): Pt2[][] {
   if (rings.length === 0) return [];
-  const sampled = rings.map((r) => resample(r, n, true));
+  // Rings that already share a vertex count are left alone: lofting a 4-point
+  // rectangle to a 4-point rectangle should give a solid with four side faces,
+  // not sixty-four. Mixed rings are resampled to a common count first.
+  const first = rings[0]!.length;
+  const uniform = rings.every((r) => r.length === first) && first >= 3 && first <= 48;
+  const count = uniform ? first : n;
+  const sampled = rings.map((r) => (uniform ? r.map((p) => ({ ...p })) : resample(r, count, true)));
   const ref0 = sampled[0]!;
   if (shoelace(ref0) < 0) ref0.reverse();
   const out: Pt2[][] = [ref0];
@@ -112,11 +118,11 @@ export function alignRings(rings: Pt2[][], n = 64): Pt2[][] {
     // centre both so the rotation search compares shape, not position
     const cp = centroid2(prev), cr = centroid2(ring);
     let bestK = 0, bestErr = Infinity;
-    for (let k = 0; k < n; k++) {
+    for (let k = 0; k < count; k++) {
       let err = 0;
-      for (let j = 0; j < n; j++) {
+      for (let j = 0; j < count; j++) {
         const P = prev[j]!;
-        const Q = ring[(j + k) % n]!;
+        const Q = ring[(j + k) % count]!;
         const da = (P.a - cp.a) - (Q.a - cr.a);
         const db = (P.b - cp.b) - (Q.b - cr.b);
         err += da * da + db * db;

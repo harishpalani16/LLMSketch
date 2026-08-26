@@ -1,15 +1,11 @@
 import { store } from "../state.ts";
-import { validationScene } from "../graph/model.ts";
-import { validateOp } from "../ops/registry.ts";
 import { NdjsonParser, type ParsedLine } from "./ndjson.ts";
+import { validateLine, type Rejection } from "./turn.ts";
 import { streamCompletion, type Message } from "./client.ts";
 import { systemPrompt, retryTurn, userTurn } from "./prompt.ts";
 import { serializeScene } from "./serialize.ts";
 
-export interface Rejection {
-  line: string;
-  reason: string;
-}
+export type { Rejection };
 
 export interface TurnResult {
   summary: string;
@@ -39,13 +35,12 @@ export async function runTurn(userText: string, signal?: AbortSignal): Promise<T
         summary = line.value.summary;
         continue;
       }
-      const scene = validationScene(store.get().doc);
-      const result = validateOp({ op: line.value.op, params: line.value.params }, scene);
-      if (!result.ok) {
-        rejected.push({ line: line.value.raw, reason: result.errors.join("; ") });
+      const verdict = validateLine(store.get().doc, line.value);
+      if (!verdict.ok) {
+        rejected.push({ line: line.value.raw, reason: verdict.reason });
         continue;
       }
-      const node = store.applyOp(line.value.op, result.params, { ghost: true });
+      const node = store.applyOp(line.value.op, verdict.params, { ghost: true });
       if (node) applied.push(node.id);
       else applied.push(line.value.op);
     }

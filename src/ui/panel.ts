@@ -1,6 +1,6 @@
 import type { OpNode, Stroke } from "../core/types.ts";
 import { store, MODEL_DEFAULT } from "../state.ts";
-import { describeNode, liveSolids } from "../graph/model.ts";
+import { describeNode, liveSolids, producingChain } from "../graph/model.ts";
 import { opDef } from "../ops/registry.ts";
 import { byId, clear, fmt, h } from "./dom.ts";
 
@@ -81,6 +81,10 @@ export function mountPanel(actions: PanelActions): void {
   const proposal = h("div");
   historySection.root.append(proposal);
 
+  /** Actions for the current stroke selection (SPEC §5.3, §5.4). */
+  const selectionActions = h("div", { class: "buttons", style: "margin-top:8px" });
+  strokeSection.root.append(selectionActions);
+
   store.subscribe((s) => {
     /* -------------------------------------------------------- strokes */
     strokeSection.count.textContent = String(s.doc.strokes.length);
@@ -92,6 +96,39 @@ export function mountPanel(actions: PanelActions): void {
       strokeSection.body.append(strokeRow(stroke, s.selection.strokes.includes(stroke.id)));
     }
 
+    clear(selectionActions);
+    const picked = s.doc.strokes.filter((x) => s.selection.strokes.includes(x.id));
+    if (picked.length) {
+      const ids = picked.map((x) => x.id);
+      const first = picked[0]!;
+      const buttons: (HTMLElement | null)[] = [
+        h("button", {
+          class: "btn",
+          onclick: () => store.duplicateStrokes(ids),
+          text: "duplicate",
+        }),
+        h("button", {
+          class: "btn",
+          title: "put these strokes on the sheet's current level",
+          onclick: () => store.relevelStrokes(ids, s.view.offset),
+          text: `re-level to ${fmt(s.view.offset)}`,
+        }),
+        picked.some((x) => x.raw)
+          ? h("button", {
+              class: "btn",
+              onclick: () => ids.forEach((id) => store.toggleFit(id)),
+              text: first.fitted === false ? "as fit" : "as drawn",
+            })
+          : null,
+        h("button", {
+          class: "btn danger",
+          onclick: () => store.removeStrokes(ids),
+          text: "delete",
+        }),
+      ];
+      selectionActions.append(...buttons.filter((b): b is HTMLElement => b !== null));
+    }
+
     /* -------------------------------------------------------- history */
     historySection.count.textContent = String(s.doc.nodes.length);
     clear(historySection.body);
@@ -100,9 +137,10 @@ export function mountPanel(actions: PanelActions): void {
         h("p", { class: "note", text: "Interpret the sketch, or push/pull a face." }),
       );
     }
+    const chain = producingChain(s.doc.nodes, s.selection.node);
     for (const node of s.doc.nodes) {
       historySection.body.append(
-        ...nodeRow(node, s.ghosts.includes(node.id), s.selection.node === node.id, actions),
+        ...nodeRow(node, s.ghosts.includes(node.id), chain.has(node.id), actions),
       );
     }
 
@@ -132,7 +170,12 @@ export function mountPanel(actions: PanelActions): void {
     }
 
     /* --------------------------------------------------------- solids */
-    const live = liveSolids(s.doc.nodes);
+    // Only solids the kernel actually produced are listed. A node in error has
+    // no geometry, and its redline row in History is the honest place to say so.
+    const built = new Set(s.solids.map((x) => x.id));
+    const live = liveSolids(s.doc.nodes).filter(
+      (l) => built.has(l.id) || s.doc.nodes.find((n) => n.id === l.node)?.state !== "error",
+    );
     solidSection.count.textContent = String(live.length);
     clear(solidSection.body);
     for (const l of live) {

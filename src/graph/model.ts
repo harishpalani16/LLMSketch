@@ -133,6 +133,44 @@ export function applyOp(doc: Doc, op: string, params: Record<string, unknown>): 
   return { ...doc, nodes: [...doc.nodes, makeNode(doc.nodes, op, params)] };
 }
 
+/**
+ * The chain of nodes that produced a node's inputs, all the way back (SPEC §11).
+ * Clicking a solid lights up the whole program that made it.
+ */
+export function producingChain(nodes: OpNode[], nodeId: string | null): Set<string> {
+  const chain = new Set<string>();
+  if (!nodeId) return chain;
+  const byOutput = new Map<string, string>();
+  for (const n of nodes) for (const o of n.outputs) byOutput.set(o, n.id);
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+
+  const walk = (id: string): void => {
+    if (chain.has(id)) return;
+    chain.add(id);
+    const node = byId.get(id);
+    if (!node) return;
+    for (const solid of referencedSolids(node)) {
+      const from = byOutput.get(solid);
+      if (from) walk(from);
+    }
+  };
+  walk(nodeId);
+  return chain;
+}
+
+function referencedSolids(node: OpNode): string[] {
+  const out: string[] = [];
+  for (const value of Object.values(node.params)) {
+    if (typeof value === "string" && /^B\d+$/.test(value)) out.push(value);
+    else if (value && typeof value === "object" && "solid" in value) {
+      out.push(String((value as { solid: unknown }).solid));
+    } else if (Array.isArray(value)) {
+      for (const v of value) if (typeof v === "string" && /^B\d+$/.test(v)) out.push(v);
+    }
+  }
+  return out;
+}
+
 export function describeNode(node: OpNode): string {
   const def = opDef(node.op);
   const shown = (def?.params ?? [])
@@ -153,4 +191,8 @@ export function describeNode(node: OpNode): string {
   return `${node.op} ${shown}`.trim();
 }
 
-export const round = (n: number): number => Math.round(n * 10) / 10;
+/** One decimal for metres, three for the sub-metre values like wall thickness. */
+export function round(n: number): number {
+  const places = Math.abs(n) < 1 ? 1000 : 10;
+  return Math.round(n * places) / places;
+}

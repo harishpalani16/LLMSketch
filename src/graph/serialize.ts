@@ -57,9 +57,10 @@ export function serializeDoc(doc: Doc): WireDoc {
       if (s.fitted === false) w.t = 0;
       return w;
     }),
-    n: doc.nodes
-      .filter((n) => !n.ghost)
-      .map((n) => ({ i: n.id, o: n.op, p: n.params, b: n.outputs })),
+    // Proposed (ghost) nodes are part of the history too: sharing mid-proposal
+    // should show the receiver exactly what the sender is looking at. Discarding
+    // a proposal removes its node, so nothing unwanted can survive.
+    n: doc.nodes.map((n) => ({ i: n.id, o: n.op, p: n.params, b: n.outputs })),
     ...(doc.intent ? { t: doc.intent } : {}),
   };
 }

@@ -10,7 +10,14 @@ export function h<K extends keyof HTMLElementTagNameMap>(
 ): HTMLElementTagNameMap[K] {
   const el = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) {
-    if (value === undefined || value === false) continue;
+    if (value === undefined) continue;
+    // aria-* states are meaningful when false, so they are always written out;
+    // everything else treats false as "leave the attribute off".
+    if (key.startsWith("aria-")) {
+      el.setAttribute(key, String(value));
+      continue;
+    }
+    if (value === false) continue;
     if (key.startsWith("on") && typeof value === "function") {
       el.addEventListener(key.slice(2).toLowerCase(), value as EventListener);
     } else if (key === "class") {

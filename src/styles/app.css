@@ -71,6 +71,11 @@ textarea {
   color: var(--chalk);
 }
 
+.tool:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
 .tool[aria-pressed="true"] {
   background: var(--ground-3);
   border-color: var(--cyan);
@@ -150,7 +155,7 @@ canvas {
 .planebar {
   position: absolute;
   left: 12px;
-  bottom: 76px;
+  bottom: 98px;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -179,10 +184,18 @@ canvas {
   min-width: 56px;
 }
 
+.marquee {
+  position: fixed;
+  border: 1px dashed var(--cyan);
+  background: color-mix(in srgb, var(--cyan) 10%, transparent);
+  pointer-events: none;
+  z-index: 4;
+}
+
 .statusline {
   position: absolute;
   left: 12px;
-  bottom: 52px;
+  bottom: 66px;
   font-family: var(--mono);
   font-size: 11px;
   color: var(--chalk-faint);
@@ -251,7 +264,7 @@ canvas {
 .loading {
   position: absolute;
   right: 12px;
-  bottom: 76px;
+  bottom: 98px;
   width: 240px;
   background: color-mix(in srgb, var(--ground-2) 92%, transparent);
   border: 1px solid var(--line);

@@ -39,8 +39,22 @@ capture.onPushPullPreview = (d) => {
   if (d) setStatus(`push/pull ${d.toFixed(1)} m — release to commit`);
 };
 
+const marquee = document.createElement("div");
+marquee.className = "marquee";
+marquee.hidden = true;
+canvas.parentElement?.append(marquee);
+capture.onMarquee = (box) => {
+  marquee.hidden = !box;
+  if (!box) return;
+  marquee.style.left = `${box.x}px`;
+  marquee.style.top = `${box.y}px`;
+  marquee.style.width = `${box.w}px`;
+  marquee.style.height = `${box.h}px`;
+};
+
 /* ------------------------------------------------------------------ render */
 
+let framed = false;
 store.subscribe((s) => {
   sheet.visible = s.view.showSheet;
   sheet.place(s.view.plane, s.view.offset);
@@ -48,6 +62,10 @@ store.subscribe((s) => {
   strokes.halfWidth = 2.2 / Math.max(1e-6, viewport.pixelsPerUnit());
   strokes.sync(s.doc.strokes, new Set(s.selection.strokes));
   display.sync(s.solids, new Set(s.ghosts), new Set(s.selection.solids));
+  if (!framed && s.solids.length) {
+    framed = true;
+    frameAll();
+  }
   viewport.invalidate();
 });
 
@@ -168,6 +186,11 @@ window.addEventListener("keydown", (e) => {
     else store.undo();
     return;
   }
+  if (meta && e.key.toLowerCase() === "d") {
+    e.preventDefault();
+    store.duplicateStrokes(store.get().selection.strokes);
+    return;
+  }
   switch (e.key.toLowerCase()) {
     case "d":
       store.patchView({ tool: "draw" });
@@ -208,6 +231,27 @@ window.addEventListener("keydown", (e) => {
       if (sel.length) store.removeStrokes(sel);
       break;
     }
+    case "arrowleft":
+    case "arrowright":
+    case "arrowup":
+    case "arrowdown": {
+      const sel = store.get().selection.strokes;
+      if (!sel.length) break;
+      e.preventDefault();
+      const step = e.shiftKey ? 0.1 : 0.5;
+      const da = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
+      const db = e.key === "ArrowDown" ? -step : e.key === "ArrowUp" ? step : 0;
+      store.moveStrokes(sel, da, db);
+      break;
+    }
+    case "[":
+    case "]": {
+      const sel = store.get().selection.strokes;
+      const first = store.get().doc.strokes.find((s) => s.id === sel[0]);
+      if (!first) break;
+      store.relevelStrokes(sel, first.offset + (e.key === "]" ? 0.5 : -0.5));
+      break;
+    }
     default:
       break;
   }
@@ -228,8 +272,9 @@ void kernel()
   })
   .catch((err: Error) => store.patch({ error: err.message }));
 
+// Cache the 50 MB kernel so the cost is paid once (SPEC §2c).
 if ("serviceWorker" in navigator && import.meta.env.PROD) {
-  addEventListener("load", () => {
-    void navigator.serviceWorker.register(new URL("./sw.ts", import.meta.url), { type: "module" });
+  window.addEventListener("load", () => {
+    void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`);
   });
 }

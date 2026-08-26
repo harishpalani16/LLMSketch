@@ -1,5 +1,6 @@
 import type { Doc, Stroke } from "../core/types.ts";
 import { circularity, straightness } from "../sketch/beautify.ts";
+import { centroid2 } from "../sketch/geom.ts";
 
 /**
  * SPEC §10 -- the no-key interpreter. It emits exactly the same op JSON as the
@@ -18,6 +19,14 @@ export interface HeuristicOp {
 const isGround = (s: Stroke) => s.plane === "ground";
 const maxDim = (s: Stroke) => Math.max(s.metrics.w, s.metrics.h);
 
+/** Do two outlines on the same plane sit over one another? */
+function overlaps(a: Stroke, b: Stroke): boolean {
+  const ca = centroid2(a.pts);
+  const cb = centroid2(b.pts);
+  const reach = Math.max(maxDim(a), maxDim(b)) * 0.5;
+  return Math.hypot(ca.a - cb.a, ca.b - cb.b) <= reach;
+}
+
 export function interpret(doc: Doc): HeuristicOp[] {
   const strokes = [...doc.strokes].sort((a, b) => a.order - b.order);
   const used = new Set<string>();
@@ -26,18 +35,23 @@ export function interpret(doc: Doc): HeuristicOp[] {
   const closed = strokes.filter((s) => s.closed);
   const open = strokes.filter((s) => !s.closed);
 
-  // 1. stacked closed strokes on one plane at different levels -> loft
+  // 1. closed outlines that sit over one another at different levels -> loft.
+  //    Proximity matters: two outlines on opposite corners of the sheet are two
+  //    separate things, not the bottom and top of one tower.
   for (const plane of ["ground", "front", "side"] as const) {
-    const stack = closed
+    const onPlane = closed
       .filter((s) => s.plane === plane && !used.has(s.id))
       .sort((a, b) => a.offset - b.offset);
-    const levels = new Set(stack.map((s) => Math.round(s.offset * 100)));
-    if (stack.length >= 2 && levels.size >= 2) {
+    for (const seed of onPlane) {
+      if (used.has(seed.id)) continue;
+      const stack = onPlane.filter((s) => !used.has(s.id) && overlaps(seed, s));
+      const levels = new Set(stack.map((s) => Math.round(s.offset * 100)));
+      if (stack.length < 2 || levels.size < 2) continue;
       for (const s of stack) used.add(s.id);
       ops.push({
         op: "loft",
         params: { strokes: stack.map((s) => s.id), ruled: false },
-        because: `${stack.length} closed outlines stacked on the ${plane} plane`,
+        because: `${stack.map((s) => s.id).join(", ")} stack over one another on the ${plane} plane`,
       });
     }
   }

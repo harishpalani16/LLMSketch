@@ -6,8 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview",
-    "test": "vitest run"
+    "preview": "vite preview --port 4173 --strictPort",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "smoke": "npm run build && node tools/run-smoke.mjs"
   },
   "dependencies": {
     "fflate": "^0.8.3",
@@ -21,5 +23,7 @@
     "typescript": "^7.0.2",
     "vite": "^8.2.2",
     "vitest": "^4.1.11"
-  }
+  },
+  "description": "Sketch strokes in 3D and turn them into real B-rep solids, backed by OpenCascade and a parametric history graph.",
+  "license": "MIT"
 }

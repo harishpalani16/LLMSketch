@@ -140,7 +140,7 @@ export class Viewport {
   frame(box: THREE.Box3): void {
     if (box.isEmpty()) return;
     box.getCenter(this.target);
-    this.extent = Math.max(4, box.getSize(new THREE.Vector3()).length() * 0.75);
+    this.extent = Math.max(4, box.getSize(new THREE.Vector3()).length() * 0.92);
     this.invalidate();
   }
 

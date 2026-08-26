@@ -27,9 +27,9 @@ type Drag =
   | { kind: "draw"; plane: PlaneKey; offset: number }
   | { kind: "orbit"; x: number; y: number }
   | { kind: "pan"; x: number; y: number }
-  | { kind: "move"; last: Pt2 }
+  | { kind: "move"; ids: string[]; plane: PlaneKey; offset: number; last: Pt2 }
   | { kind: "pushpull"; solid: string; select: string; normal: THREE.Vector3; origin: THREE.Vector3 }
-  | { kind: "lasso"; from: THREE.Vector2 };
+  | { kind: "marquee"; from: { x: number; y: number } };
 
 export class SketchCapture {
   private drag: Drag = { kind: "none" };
@@ -42,6 +42,7 @@ export class SketchCapture {
 
   onStatus: (text: string) => void = () => {};
   onPushPullPreview: (distance: number) => void = () => {};
+  onMarquee: (box: { x: number; y: number; w: number; h: number } | null) => void = () => {};
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -63,9 +64,6 @@ export class SketchCapture {
     return store.get().view;
   }
 
-  private planePoint(e: PointerEvent, plane: PlaneKey, offset: number): Pt2 | null {
-    return pointOnPlane(this.viewport, plane, offset, e.clientX, e.clientY);
-  }
 
   private onDown = (e: PointerEvent): void => {
     if (e.pointerType === "pen") this.penActive = true;
@@ -107,6 +105,12 @@ export class SketchCapture {
       case "pushpull":
         this.dragPushPull(e);
         return;
+      case "move":
+        this.dragMove(e);
+        return;
+      case "marquee":
+        this.dragMarquee(e);
+        return;
       default:
         return;
     }
@@ -115,6 +119,8 @@ export class SketchCapture {
   private onUp = (e: PointerEvent): void => {
     if (this.drag.kind === "draw") this.commitDraw(this.drag.plane, this.drag.offset);
     else if (this.drag.kind === "pushpull") this.commitPushPull();
+    else if (this.drag.kind === "move") store.endGesture();
+    else if (this.drag.kind === "marquee") this.commitMarquee(e);
     this.drag = { kind: "none" };
     if (this.canvas.hasPointerCapture(e.pointerId)) this.canvas.releasePointerCapture(e.pointerId);
   };
@@ -201,14 +207,16 @@ export class SketchCapture {
         ? e.getCoalescedEvents()
         : [e];
     for (const ev of events) {
-      const raw = this.planePoint(ev as PointerEvent, plane, offset);
-      if (!raw) continue;
+      // Smoothing happens in screen space: the one-euro constants are tuned for
+      // pixels, and a pointer that moves 400 px/s moves only 4 m/s, so filtering
+      // metres would leave the adaptive cutoff permanently asleep and the stroke
+      // lagging far behind the pen.
       const t = ev.timeStamp / 1000;
-      const filtered: Pt2 = {
-        a: this.filterA.filter(raw.a, t),
-        b: this.filterB.filter(raw.b, t),
-        w: ev.pressure > 0 ? ev.pressure : 0.5,
-      };
+      const sx = this.filterA.filter(ev.clientX, t);
+      const sy = this.filterB.filter(ev.clientY, t);
+      const raw = pointOnPlane(this.viewport, plane, offset, sx, sy);
+      if (!raw) continue;
+      const filtered: Pt2 = { ...raw, w: ev.pressure > 0 ? ev.pressure : 0.5 };
       const result = this.view.snap
         ? snap(filtered, {
             strokes: store.get().doc.strokes,
@@ -305,8 +313,11 @@ export class SketchCapture {
         ? current.includes(strokeId)
           ? current.filter((s) => s !== strokeId)
           : [...current, strokeId]
-        : [strokeId];
+        : current.includes(strokeId)
+          ? current
+          : [strokeId];
       store.select({ strokes: next, solids: [] });
+      this.startMove(e, next);
       return;
     }
     const solid = this.raycastSolid(e);
@@ -315,7 +326,67 @@ export class SketchCapture {
       store.select({ solids: [solid.id], strokes: [], node });
       return;
     }
-    store.select({ strokes: [], solids: [], node: null });
+    if (!e.shiftKey) store.select({ strokes: [], solids: [], node: null });
+    this.drag = { kind: "marquee", from: { x: e.clientX, y: e.clientY } };
+    this.onMarquee({ x: e.clientX, y: e.clientY, w: 0, h: 0 });
+  }
+
+  /** Drag selected strokes about within their own plane (SPEC §5.4). */
+  private startMove(e: PointerEvent, ids: string[]): void {
+    const strokes = store.get().doc.strokes.filter((s) => ids.includes(s.id));
+    const first = strokes[0];
+    if (!first) return;
+    // a multi-plane selection has no shared plane to drag in
+    if (strokes.some((s) => s.plane !== first.plane || s.offset !== first.offset)) return;
+    const at = pointOnPlane(this.viewport, first.plane, first.offset, e.clientX, e.clientY);
+    if (!at) return;
+    store.beginGesture();
+    this.drag = { kind: "move", ids, plane: first.plane, offset: first.offset, last: at };
+  }
+
+  private dragMove(e: PointerEvent): void {
+    if (this.drag.kind !== "move") return;
+    const at = pointOnPlane(this.viewport, this.drag.plane, this.drag.offset, e.clientX, e.clientY);
+    if (!at) return;
+    store.moveStrokes(this.drag.ids, at.a - this.drag.last.a, at.b - this.drag.last.b, {
+      silent: true,
+    });
+    this.drag = { ...this.drag, last: at };
+  }
+
+  /** Marquee select: everything whose centroid falls inside the box. */
+  private dragMarquee(e: PointerEvent): void {
+    if (this.drag.kind !== "marquee") return;
+    const { from } = this.drag;
+    this.onMarquee({
+      x: Math.min(from.x, e.clientX),
+      y: Math.min(from.y, e.clientY),
+      w: Math.abs(e.clientX - from.x),
+      h: Math.abs(e.clientY - from.y),
+    });
+  }
+
+  private commitMarquee(e: PointerEvent): void {
+    if (this.drag.kind !== "marquee") return;
+    const { from } = this.drag;
+    this.onMarquee(null);
+    const lo = { x: Math.min(from.x, e.clientX), y: Math.min(from.y, e.clientY) };
+    const hi = { x: Math.max(from.x, e.clientX), y: Math.max(from.y, e.clientY) };
+    if (hi.x - lo.x < 4 && hi.y - lo.y < 4) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const hits = store
+      .get()
+      .doc.strokes.filter((s) => {
+        const p = this.viewport.worldToScreen(
+          new THREE.Vector3(...s.metrics.centroid),
+        );
+        const x = p.x + rect.left;
+        const y = p.y + rect.top;
+        return x >= lo.x && x <= hi.x && y >= lo.y && y <= hi.y;
+      })
+      .map((s) => s.id);
+    const keep = e.shiftKey ? store.get().selection.strokes : [];
+    store.select({ strokes: [...new Set([...keep, ...hits])], solids: [], node: null });
   }
 
   private eraseAt(e: PointerEvent): void {
