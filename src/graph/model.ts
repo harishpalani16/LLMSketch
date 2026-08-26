@@ -143,7 +143,8 @@ export function describeNode(node: OpNode): string {
       if (typeof v === "string") return v;
       if (Array.isArray(v)) return v.join("+");
       if (v && typeof v === "object" && "select" in v) {
-        return `${(v as { solid: string }).solid}:${(v as { select: string }).select}`;
+        const ref = v as unknown as { solid: string; select: string };
+        return `${ref.solid}:${ref.select}`;
       }
       return null;
     })

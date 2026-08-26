@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Sketch to Solid</title>
+    <meta
+      name="description"
+      content="Sketch strokes in 3D and turn them into real B-rep solids with a parametric history graph. Exports STEP."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="app">
+      <nav class="rail" id="rail" aria-label="Tools"></nav>
+      <main class="stage">
+        <canvas id="view"></canvas>
+        <div class="hud" id="hud"></div>
+        <div class="planebar" id="planebar"></div>
+        <div class="statusline" id="status"></div>
+        <div class="intent" id="intent"></div>
+        <div class="loading" id="loading" hidden></div>
+      </main>
+      <aside class="panel" id="panel" aria-label="Model"></aside>
+    </div>
+    <dialog id="dialog"></dialog>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
