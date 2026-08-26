@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { PlaneKey, Pt2, Stroke } from "../core/types.ts";
+import type { PlaneKey, Pt2, SketchFrame, Stroke } from "../core/types.ts";
 import { PLANES, to3D } from "../core/planes.ts";
 
 /**
@@ -12,8 +12,15 @@ const CHALK = 0xe9eef6;
 const CYAN = 0x5ac8e0;
 const DIM = 0x8598b8;
 
-function ribbon(pts: Pt2[], closed: boolean, plane: PlaneKey, offset: number, halfWidth: number) {
-  const { u, v, n } = PLANES[plane];
+function ribbon(
+  pts: Pt2[],
+  closed: boolean,
+  plane: PlaneKey,
+  offset: number,
+  halfWidth: number,
+  frame?: SketchFrame,
+) {
+  const { u, v, n } = frame ?? PLANES[plane];
   const positions: number[] = [];
   const list = closed && pts.length > 2 ? [...pts, pts[0]!] : pts;
   if (list.length < 2) return null;
@@ -33,7 +40,10 @@ function ribbon(pts: Pt2[], closed: boolean, plane: PlaneKey, offset: number, ha
     right.push({ a: list[i]!.a + dy * w, b: list[i]!.b - dx * w });
   }
 
-  const at = (p: Pt2) => to3D(p, plane, offset + 0.004 * (n[0] + n[1] + n[2]));
+  const at = (p: Pt2) => {
+    const q = to3D(p, plane, offset, frame);
+    return [q[0] + n[0] * 0.004, q[1] + n[1] * 0.004, q[2] + n[2] * 0.004];
+  };
   for (let i = 0; i < list.length - 1; i++) {
     const l0 = at(left[i]!);
     const r0 = at(right[i]!);
@@ -74,11 +84,11 @@ export class StrokeLayer {
     for (const s of strokes) {
       seen.add(s.id);
       const shown = s.fitted === false && s.raw ? s.raw : s.pts;
-      const key = `${s.pts.length}:${s.offset}:${s.plane}:${s.closed}:${s.fitted}:${this.halfWidth.toFixed(4)}:${selected.has(s.id)}:${shown[0]?.a ?? 0}:${shown[shown.length - 1]?.b ?? 0}`;
+      const key = `${s.pts.length}:${s.offset}:${s.plane}:${JSON.stringify(s.frame)}:${s.closed}:${s.fitted}:${this.halfWidth.toFixed(4)}:${selected.has(s.id)}:${shown[0]?.a ?? 0}:${shown[shown.length - 1]?.b ?? 0}`;
       const existing = this.entries.get(s.id);
       if (existing && existing.key === key) continue;
       if (existing) this.remove(s.id);
-      const geo = ribbon(shown, s.closed, s.plane, s.offset, this.halfWidth);
+      const geo = ribbon(shown, s.closed, s.plane, s.offset, this.halfWidth, s.frame);
       if (!geo) continue;
       const mesh = new THREE.Mesh(
         geo,
@@ -98,9 +108,9 @@ export class StrokeLayer {
     for (const id of [...this.entries.keys()]) if (!seen.has(id)) this.remove(id);
   }
 
-  setLive(pts: Pt2[], closed: boolean, plane: PlaneKey, offset: number): void {
+  setLive(pts: Pt2[], closed: boolean, plane: PlaneKey, offset: number, frame?: SketchFrame): void {
     this.clearLive();
-    const geo = ribbon(pts, closed, plane, offset, this.halfWidth);
+    const geo = ribbon(pts, closed, plane, offset, this.halfWidth, frame);
     if (!geo) return;
     this.live = new THREE.Mesh(
       geo,

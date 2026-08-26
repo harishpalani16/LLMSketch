@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import type { PlaneKey } from "../core/types.ts";
+import type { PlaneKey, SketchFrame } from "../core/types.ts";
 import { PLANES } from "../core/planes.ts";
 
 /**
@@ -54,6 +54,16 @@ export class Sheet {
     );
     this.group.quaternion.setFromRotationMatrix(m);
     this.group.position.set(n[0] * offset, n[1] * offset, n[2] * offset);
+  }
+
+  placeFrame(frame: SketchFrame): void {
+    const m = new THREE.Matrix4().makeBasis(
+      new THREE.Vector3(...frame.u),
+      new THREE.Vector3(...frame.v),
+      new THREE.Vector3(...frame.n),
+    );
+    this.group.quaternion.setFromRotationMatrix(m);
+    this.group.position.set(...frame.origin);
   }
 
   /**

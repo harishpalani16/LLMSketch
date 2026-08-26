@@ -5,11 +5,12 @@ import { applyOp, nextStrokeId } from "./graph/model.ts";
 import { recomputeMetrics } from "./sketch/geom.ts";
 
 export type ViewKey = "iso" | "top" | "front" | "side";
-export type Tool = "draw" | "select" | "erase" | "pushpull";
+export type Tool = "orbit" | "draw" | "line" | "rect" | "circle" | "select" | "erase" | "pushpull";
 
 export interface ViewState {
   camera: ViewKey;
   plane: PlaneKey;
+  workplaneMode: "axis" | "view" | "face";
   offset: number;
   tool: Tool;
   snap: boolean;
@@ -56,6 +57,7 @@ function initialState(): AppState {
     view: {
       camera: "iso",
       plane: "ground",
+      workplaneMode: "axis",
       offset: 0,
       tool: "draw",
       snap: true,
@@ -191,7 +193,24 @@ class Store {
     this.commit({
       ...this.state.doc,
       strokes: this.state.doc.strokes.map((s) =>
-        set.has(s.id) ? recomputeMetrics({ ...s, offset }) : s,
+        set.has(s.id)
+          ? recomputeMetrics(
+              s.frame
+                ? {
+                    ...s,
+                    offset,
+                    frame: {
+                      ...s.frame,
+                      origin: [
+                        s.frame.origin[0] + s.frame.n[0] * (offset - s.offset),
+                        s.frame.origin[1] + s.frame.n[1] * (offset - s.offset),
+                        s.frame.origin[2] + s.frame.n[2] * (offset - s.offset),
+                      ],
+                    },
+                  }
+                : { ...s, offset },
+            )
+          : s,
       ),
     });
   }

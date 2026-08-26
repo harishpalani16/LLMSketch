@@ -54,7 +54,8 @@ export type Builder = (ctx: BuildCtx, p: Record<string, any>) => BuildResult;
 /* stroke -> topology                                                          */
 /* -------------------------------------------------------------------------- */
 
-const pts3 = (s: Stroke): Vec3[] => s.pts.map((p) => to3D(p, s.plane, s.offset));
+const point3 = (s: Stroke, p: Pt2): Vec3 => to3D(p, s.plane, s.offset, s.frame);
+const pts3 = (s: Stroke): Vec3[] => s.pts.map((p) => point3(s, p));
 
 function requireClosed(s: Stroke): void {
   if (!s.closed) throw new Error(`${s.id} is an open stroke; this op needs a closed outline`);
@@ -75,7 +76,7 @@ function faceOf(ctx: BuildCtx, s: Stroke): Shape {
   return faceFromWire(ctx.oc, ctx.scope, wireOf(ctx, s));
 }
 
-const normalOf = (s: Stroke): Vec3 => PLANES[s.plane].n;
+const normalOf = (s: Stroke): Vec3 => s.frame?.n ?? PLANES[s.plane].n;
 
 /** Rings, resampled and pre-aligned so lofts do not twist (SPEC §8.1). */
 function alignedWires(ctx: BuildCtx, strokes: Stroke[]): Shape[] {
@@ -83,7 +84,7 @@ function alignedWires(ctx: BuildCtx, strokes: Stroke[]): Shape[] {
   const rings = alignRings(strokes.map((s) => s.pts));
   return rings.map((ring, i) => {
     const s = strokes[i]!;
-    return wireFromPoints(ctx.oc, ctx.scope, ring.map((p) => to3D(p, s.plane, s.offset)), true);
+    return wireFromPoints(ctx.oc, ctx.scope, ring.map((p) => point3(s, p)), true);
   });
 }
 
@@ -256,7 +257,7 @@ export const BUILDERS: Record<string, Builder> = {
     const wire = wireFromPoints(
       ctx.oc,
       ctx.scope,
-      ring.map((q) => to3D(q, s.plane, s.offset)),
+      ring.map((q) => point3(s, q)),
       true,
     );
     const face = faceFromWire(ctx.oc, ctx.scope, wire);
@@ -289,7 +290,7 @@ export const BUILDERS: Record<string, Builder> = {
     const n = Math.max(8, Math.min(64, rails.length * 8));
     const wires = sections.map((s) => {
       const pts = resample(s.pts, n, s.closed);
-      return wireFromPoints(ctx.oc, ctx.scope, pts.map((q) => to3D(q, s.plane, s.offset)), s.closed);
+      return wireFromPoints(ctx.oc, ctx.scope, pts.map((q) => point3(s, q)), s.closed);
     });
     return { shapes: [thruSections(ctx, wires, false, false)] };
   },
@@ -317,8 +318,8 @@ export const BUILDERS: Record<string, Builder> = {
     const d = bb.maxB - bb.minB;
     const h = (p.height as number) ?? Math.max(w, d) * 0.55;
     const n = normalOf(s);
-    const corner = to3D({ a: bb.minA, b: bb.minB }, s.plane, s.offset);
-    const far = to3D({ a: bb.maxA, b: bb.maxB }, s.plane, s.offset);
+    const corner = point3(s, { a: bb.minA, b: bb.minB });
+    const far = point3(s, { a: bb.maxA, b: bb.maxB });
     const hi: Vec3 = [far[0] + n[0] * h, far[1] + n[1] * h, far[2] + n[2] * h];
     return {
       shapes: [
@@ -335,7 +336,7 @@ export const BUILDERS: Record<string, Builder> = {
     const fit = circleFit(s.pts);
     if (!fit || fit.r < 1e-6) throw new Error(`${s.id} is not circular enough for a cylinder`);
     const h = (p.height as number) ?? fit.r * 2.2;
-    const centre = to3D({ a: fit.cx, b: fit.cy }, s.plane, s.offset);
+    const centre = point3(s, { a: fit.cx, b: fit.cy });
     return {
       shapes: [
         scope
@@ -350,7 +351,7 @@ export const BUILDERS: Record<string, Builder> = {
     const s = ctx.stroke(p.stroke);
     const fit = circleFit(s.pts);
     if (!fit || fit.r < 1e-6) throw new Error(`${s.id} is not circular enough for a sphere`);
-    const centre = to3D({ a: fit.cx, b: fit.cy }, s.plane, s.offset);
+    const centre = point3(s, { a: fit.cx, b: fit.cy });
     return {
       shapes: [scope.t(new oc.BRepPrimAPI_MakeSphere_5(scope.t(pnt(oc, centre)), fit.r)).Shape()],
     };
@@ -505,10 +506,10 @@ export const BUILDERS: Record<string, Builder> = {
     const rail = ctx.stroke(p.rail);
     const count = p.count as number;
     const samples = resample(rail.pts, count, rail.closed);
-    const base = to3D(samples[0]!, rail.plane, rail.offset);
+    const base = point3(rail, samples[0]!);
     const out: Shape[] = [];
     for (let i = 1; i < count; i++) {
-      const q = to3D(samples[i]!, rail.plane, rail.offset);
+      const q = point3(rail, samples[i]!);
       out.push(translateCopy(ctx, src, [q[0] - base[0], q[1] - base[1], q[2] - base[2]]));
     }
     return { shapes: out, tags: ctx.tagsOf(p.solid) };

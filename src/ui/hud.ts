@@ -4,7 +4,24 @@ import { offsetDetents } from "../scene/picking.ts";
 import { byId, clear, fmt, h } from "./dom.ts";
 
 const VIEWS: ViewKey[] = ["iso", "top", "front", "side"];
-const PLANES: PlaneKey[] = ["ground", "front", "side"];
+type WorkplaneChoice = PlaneKey | "view" | "face";
+const WORKPLANES: { value: WorkplaneChoice; label: string }[] = [
+  { value: "ground", label: "Level / horizontal" },
+  { value: "front", label: "Front elevation" },
+  { value: "side", label: "Side elevation" },
+  { value: "view", label: "Current view" },
+  { value: "face", label: "Model face (pick on canvas)" },
+];
+const TOOL_NAMES = {
+  orbit: "Orbit",
+  select: "Select",
+  draw: "Freehand",
+  line: "Line",
+  rect: "Rectangle",
+  circle: "Circle",
+  pushpull: "Push / Pull",
+  erase: "Erase",
+} as const;
 
 /**
  * The HUD keeps live controls (offset slider, intent field) as persistent
@@ -22,20 +39,26 @@ export function mountHud(actions: { setView(v: ViewKey): void; interpret(): void
     h("button", { onclick: () => actions.setView(v), text: v, "aria-pressed": false }),
   );
   const counts = h("div", { class: "chip" });
+  const activeTool = h("div", { class: "active-tool-chip" });
   hud.append(
     h("div", { class: "views", role: "group", "aria-label": "Camera" }, ...viewButtons),
-    h("div", { class: "chip", text: "1 grid square = 1 m" }),
+    h("div", { class: "chip", text: "Grid 1 m" }),
     counts,
+    activeTool,
   );
 
   const planeSelect = h(
     "select",
     {
       id: "plane-select",
-      onchange: (e: Event) =>
-        store.patchView({ plane: (e.target as HTMLSelectElement).value as PlaneKey }),
+      onchange: (e: Event) => {
+        const value = (e.target as HTMLSelectElement).value as WorkplaneChoice;
+        if (value === "view") store.patchView({ workplaneMode: "view", offset: 0 });
+        else if (value === "face") store.patchView({ workplaneMode: "face", offset: 0 });
+        else store.patchView({ workplaneMode: "axis", plane: value });
+      },
     },
-    ...PLANES.map((p) => h("option", { value: p, text: p })),
+    ...WORKPLANES.map((p) => h("option", { value: p.value, text: p.label })),
   );
   const detentList = h("datalist", { id: "offset-detents" });
   const offsetRange = h("input", {
@@ -49,10 +72,11 @@ export function mountHud(actions: { setView(v: ViewKey): void; interpret(): void
     oninput: (e: Event) => store.patchView({ offset: Number((e.target as HTMLInputElement).value) }),
   });
   const offsetOut = h("output", { text: "0.0 m" });
+  const offsetLabel = h("label", { for: "offset-range", text: "Elevation" });
   planebar.append(
-    h("label", { for: "plane-select", text: "plane" }),
+    h("div", { class: "workplane-title" }, h("strong", { text: "Workplane" }), h("span", { text: "Draw level" })),
     planeSelect,
-    h("label", { for: "offset-range", text: "offset" }),
+    offsetLabel,
     offsetRange,
     detentList,
     offsetOut,
@@ -62,7 +86,7 @@ export function mountHud(actions: { setView(v: ViewKey): void; interpret(): void
     type: "text",
     id: "intent-input",
     "aria-label": "What are you drawing?",
-    placeholder: "what are you drawing? (optional)",
+    placeholder: "Describe what to build or change…",
     oninput: (e: Event) =>
       store.commit(
         { ...store.get().doc, intent: (e.target as HTMLInputElement).value },
@@ -72,8 +96,8 @@ export function mountHud(actions: { setView(v: ViewKey): void; interpret(): void
       if ((e as KeyboardEvent).key === "Enter") actions.interpret();
     },
   });
-  const interpretBtn = h("button", { class: "btn primary", onclick: actions.interpret, text: "interpret" });
-  intentBar.append(intentInput, interpretBtn);
+  const interpretBtn = h("button", { class: "btn primary", onclick: actions.interpret, text: "Build from sketch" });
+  intentBar.append(h("span", { class: "intent-icon", "aria-hidden": "true", text: "✦" }), intentInput, interpretBtn);
 
   let lastDetents = "";
   let lastStatus = "";
@@ -81,11 +105,16 @@ export function mountHud(actions: { setView(v: ViewKey): void; interpret(): void
   store.subscribe((s) => {
     VIEWS.forEach((v, i) => viewButtons[i]!.setAttribute("aria-pressed", String(s.view.camera === v)));
     counts.textContent = `${s.doc.strokes.length} strokes · ${s.solids.length} solids`;
+    activeTool.textContent = TOOL_NAMES[s.view.tool];
+    activeTool.dataset.tool = s.view.tool;
 
-    if (planeSelect.value !== s.view.plane) planeSelect.value = s.view.plane;
+    const workplaneValue = s.view.workplaneMode === "axis" ? s.view.plane : s.view.workplaneMode;
+    if (planeSelect.value !== workplaneValue) planeSelect.value = workplaneValue;
+    offsetLabel.textContent = s.view.workplaneMode === "view" ? "View depth" : "Elevation";
+    offsetRange.disabled = s.view.workplaneMode === "face";
     if (document.activeElement !== offsetRange) offsetRange.value = String(s.view.offset);
     offsetOut.textContent = `${fmt(s.view.offset)} m`;
-    const detents = offsetDetents(s.doc.strokes, s.view.plane);
+    const detents = s.view.workplaneMode !== "axis" ? [0] : offsetDetents(s.doc.strokes, s.view.plane);
     const key = detents.join(",");
     if (key !== lastDetents) {
       lastDetents = key;
@@ -97,14 +126,14 @@ export function mountHud(actions: { setView(v: ViewKey): void; interpret(): void
       intentInput.value = s.doc.intent;
     }
     intentInput.placeholder = s.session.messages.length
-      ? "say what to change -- e.g. make it 40 m and hollow it out, 300 mm walls"
-      : "what are you drawing? (optional)";
+      ? "Describe a change — e.g. make it 40 m tall with 300 mm walls"
+      : "Describe the design intent, then build from the sketch";
     interpretBtn.disabled = s.session.busy;
     interpretBtn.textContent = s.session.busy
       ? "working"
       : s.session.apiKey
-        ? "interpret"
-        : "interpret (rules)";
+        ? "Build / update"
+        : "Build from sketch";
 
     const text = s.error ?? s.session.status ?? "";
     if (text !== lastStatus) {

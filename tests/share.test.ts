@@ -6,6 +6,7 @@ import type { OC } from "../src/kernel/oc.ts";
 import { Evaluator } from "../src/kernel/evaluate.ts";
 import { deserializeDoc, docFromJson, docToJson, serializeDoc } from "../src/graph/serialize.ts";
 import { decodeDoc, encodeDoc, WARN_BYTES } from "../src/share/urlhash.ts";
+import { recomputeMetrics } from "../src/sketch/geom.ts";
 import "../src/ops/defs/index.ts";
 
 /** SPEC §12: the document is strokes + graph, and a link is that document. */
@@ -54,6 +55,26 @@ describe("document format", () => {
 
   it("rejects a payload that is not a model", () => {
     expect(() => deserializeDoc({ hello: "world" })).toThrowError(/does not contain a model/);
+  });
+
+  it("preserves a view-aligned sketch frame", () => {
+    const d = doc();
+    d.nodes = [mkNode("extrude", { stroke: "S1", height: 4, taper: 0 }, ["B1"])];
+    d.strokes = [
+      recomputeMetrics({
+        ...d.strokes[0]!,
+        frame: {
+          u: [0.707107, 0, -0.707107],
+          v: [0, 1, 0],
+          n: [0.707107, 0, 0.707107],
+          origin: [2, 3, 4],
+        },
+      }),
+    ];
+    const back = docFromJson(docToJson(d));
+    expect(back.strokes[0]!.frame).toEqual(d.strokes[0]!.frame);
+    const result = new Evaluator(oc).evaluate(back.nodes, back.strokes);
+    expect(result.solids[0]!.metrics.volume).toBeGreaterThan(1);
   });
 });
 

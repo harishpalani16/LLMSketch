@@ -16,7 +16,7 @@ export interface HeuristicOp {
   because: string;
 }
 
-const isGround = (s: Stroke) => s.plane === "ground";
+const isGround = (s: Stroke) => s.plane === "ground" && !s.frame;
 const maxDim = (s: Stroke) => Math.max(s.metrics.w, s.metrics.h);
 
 /** Do two outlines on the same plane sit over one another? */
@@ -40,7 +40,7 @@ export function interpret(doc: Doc): HeuristicOp[] {
   //    separate things, not the bottom and top of one tower.
   for (const plane of ["ground", "front", "side"] as const) {
     const onPlane = closed
-      .filter((s) => s.plane === plane && !used.has(s.id))
+      .filter((s) => s.plane === plane && !s.frame && !used.has(s.id))
       .sort((a, b) => a.offset - b.offset);
     for (const seed of onPlane) {
       if (used.has(seed.id)) continue;

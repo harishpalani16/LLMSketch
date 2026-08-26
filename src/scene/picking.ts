@@ -1,13 +1,13 @@
 import * as THREE from "three";
-import type { PlaneKey, Pt2, Stroke } from "../core/types.ts";
+import type { PlaneKey, Pt2, SketchFrame, Stroke } from "../core/types.ts";
 import { PLANES, to2D, to3D } from "../core/planes.ts";
 import type { Viewport } from "./viewport.ts";
 
 /** Minimum |n . forward| before drawing on a sheet is refused (SPEC §15 P0). */
 export const EDGE_ON_LIMIT = 0.12;
 
-export function isEdgeOn(plane: PlaneKey, viewport: Viewport): boolean {
-  const n = new THREE.Vector3(...PLANES[plane].n);
+export function isEdgeOn(plane: PlaneKey, viewport: Viewport, frame?: SketchFrame): boolean {
+  const n = new THREE.Vector3(...(frame?.n ?? PLANES[plane].n));
   return Math.abs(n.dot(viewport.forward())) < EDGE_ON_LIMIT;
 }
 
@@ -18,13 +18,18 @@ export function pointOnPlane(
   offset: number,
   x: number,
   y: number,
+  frame?: SketchFrame,
 ): Pt2 | null {
-  const n = PLANES[plane].n;
-  const three = new THREE.Plane(new THREE.Vector3(n[0], n[1], n[2]), -offset);
+  const n = frame?.n ?? PLANES[plane].n;
+  const origin = frame?.origin ?? [n[0] * offset, n[1] * offset, n[2] * offset];
+  const three = new THREE.Plane().setFromNormalAndCoplanarPoint(
+    new THREE.Vector3(...n),
+    new THREE.Vector3(...(origin as [number, number, number])),
+  );
   const ray = viewport.screenToRay(x, y);
   const hit = ray.intersectPlane(three, new THREE.Vector3());
   if (!hit) return null;
-  return to2D([hit.x, hit.y, hit.z], plane);
+  return to2D([hit.x, hit.y, hit.z], plane, frame);
 }
 
 export interface SnapResult {
@@ -36,6 +41,7 @@ export interface SnapContext {
   strokes: Stroke[];
   plane: PlaneKey;
   offset: number;
+  frame?: SketchFrame;
   /** screen pixels per world unit, for the pixel-radius snaps */
   ppu: number;
   gridStep: number;
@@ -60,7 +66,7 @@ export function snap(p: Pt2, ctx: SnapContext): SnapResult {
   let best: Pt2 | null = null;
   let bestD = px(12);
   for (const s of ctx.strokes) {
-    if (s.plane !== ctx.plane || Math.abs(s.offset - ctx.offset) > 1e-6) continue;
+    if (!sameSketchPlane(s, ctx.plane, ctx.offset, ctx.frame)) continue;
     for (const q of s.pts) {
       const d = Math.hypot(p.a - q.a, p.b - q.b);
       if (d < bestD) {
@@ -102,4 +108,12 @@ export function offsetDetents(strokes: Stroke[], plane: PlaneKey): number[] {
 export function worldPoint(p: Pt2, plane: PlaneKey, offset: number): THREE.Vector3 {
   const v = to3D(p, plane, offset);
   return new THREE.Vector3(v[0], v[1], v[2]);
+}
+
+function sameSketchPlane(s: Stroke, plane: PlaneKey, offset: number, frame?: SketchFrame): boolean {
+  if (Boolean(s.frame) !== Boolean(frame)) return false;
+  if (!frame || !s.frame) return s.plane === plane && Math.abs(s.offset - offset) <= 1e-6;
+  return [...s.frame.n, ...s.frame.origin].every(
+    (value, i) => Math.abs(value - [...frame.n, ...frame.origin][i]!) < 1e-5,
+  );
 }

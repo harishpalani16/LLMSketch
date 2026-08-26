@@ -1,4 +1,4 @@
-import type { PlaneKey, Pt2 } from "./types.ts";
+import type { PlaneKey, Pt2, SketchFrame } from "./types.ts";
 
 export type Vec3 = [number, number, number];
 
@@ -38,7 +38,15 @@ export function unit(a: Vec3): Vec3 {
 }
 
 /** Plane-local (a,b) at `offset` along n -> world xyz. */
-export function to3D(p: Pt2, plane: PlaneKey, offset: number): Vec3 {
+export function to3D(p: Pt2, plane: PlaneKey, offset: number, frame?: SketchFrame): Vec3 {
+  if (frame) {
+    const { u, v, origin } = frame;
+    return [
+      origin[0] + u[0] * p.a + v[0] * p.b,
+      origin[1] + u[1] * p.a + v[1] * p.b,
+      origin[2] + u[2] * p.a + v[2] * p.b,
+    ];
+  }
   const { u, v, n } = PLANES[plane];
   return [
     u[0] * p.a + v[0] * p.b + n[0] * offset,
@@ -48,7 +56,11 @@ export function to3D(p: Pt2, plane: PlaneKey, offset: number): Vec3 {
 }
 
 /** World xyz -> plane-local (a,b); the n component is the offset. */
-export function to2D(p: Vec3, plane: PlaneKey): Pt2 {
+export function to2D(p: Vec3, plane: PlaneKey, frame?: SketchFrame): Pt2 {
+  if (frame) {
+    const q = sub(p, frame.origin);
+    return { a: dot(q, frame.u), b: dot(q, frame.v) };
+  }
   const { u, v } = PLANES[plane];
   return { a: dot(p, u), b: dot(p, v) };
 }
@@ -64,4 +76,8 @@ export function basisFromNormal(n: Vec3): PlaneBasis {
   const u = unit(cross(up, nn));
   const v = cross(nn, u);
   return { u, v, n: nn };
+}
+
+export function frameNormal(plane: PlaneKey, frame?: SketchFrame): Vec3 {
+  return frame?.n ?? PLANES[plane].n;
 }

@@ -1,4 +1,4 @@
-import type { Doc, OpNode, PlaneKey, Stroke, StrokeKind, SubRef } from "../core/types.ts";
+import type { Doc, OpNode, PlaneKey, SketchFrame, Stroke, StrokeKind, SubRef } from "../core/types.ts";
 import { strokeMetrics } from "../sketch/geom.ts";
 
 /**
@@ -21,6 +21,7 @@ interface WireStroke {
   n?: string;
   f?: SubRef;
   t?: 0 | 1;
+  x?: number[];
 }
 
 interface WireNode {
@@ -38,6 +39,7 @@ interface WireDoc {
 }
 
 const r3 = (n: number): number => Math.round(n * 1000) / 1000;
+const r6 = (n: number): number => Math.round(n * 1_000_000) / 1_000_000;
 
 export function serializeDoc(doc: Doc): WireDoc {
   return {
@@ -55,6 +57,14 @@ export function serializeDoc(doc: Doc): WireDoc {
       if (s.note) w.n = s.note;
       if (s.onFace) w.f = s.onFace;
       if (s.fitted === false) w.t = 0;
+      if (s.frame) {
+        w.x = [
+          ...s.frame.u.map(r6),
+          ...s.frame.v.map(r6),
+          ...s.frame.n.map(r6),
+          ...s.frame.origin.map(r3),
+        ];
+      }
       return w;
     }),
     // Proposed (ghost) nodes are part of the history too: sharing mid-proposal
@@ -79,10 +89,19 @@ export function deserializeDoc(raw: unknown): Doc {
   const strokes: Stroke[] = w.s.map((s, index) => {
     const pts = unpack(s.d);
     const closed = s.c === 1;
+    const frame: SketchFrame | undefined = s.x?.length === 12
+      ? {
+          u: [s.x[0]!, s.x[1]!, s.x[2]!],
+          v: [s.x[3]!, s.x[4]!, s.x[5]!],
+          n: [s.x[6]!, s.x[7]!, s.x[8]!],
+          origin: [s.x[9]!, s.x[10]!, s.x[11]!],
+        }
+      : undefined;
     return {
       id: s.i,
       plane: s.p,
       offset: s.o,
+      frame,
       pts,
       closed,
       kind: s.k,
@@ -91,7 +110,7 @@ export function deserializeDoc(raw: unknown): Doc {
       onFace: s.f,
       raw: s.r ? unpack(s.r) : undefined,
       fitted: s.t === 0 ? false : undefined,
-      metrics: strokeMetrics(pts, closed, s.p, s.o),
+      metrics: strokeMetrics(pts, closed, s.p, s.o, frame),
     };
   });
   const nodes: OpNode[] = w.n.map((n) => ({

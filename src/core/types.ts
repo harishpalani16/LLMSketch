@@ -18,6 +18,14 @@ export interface Pt2 {
   w?: number;
 }
 
+/** A saved arbitrary sketch plane. Coordinates are local to origin/u/v. */
+export interface SketchFrame {
+  u: [number, number, number];
+  v: [number, number, number];
+  n: [number, number, number];
+  origin: [number, number, number];
+}
+
 export interface StrokeMetrics {
   w: number;
   h: number;
@@ -30,6 +38,8 @@ export interface Stroke {
   id: string;
   plane: PlaneKey;
   offset: number;
+  /** Present for view-aligned or non-axis-aligned face sketches. */
+  frame?: SketchFrame;
   pts: Pt2[];
   closed: boolean;
   kind: StrokeKind;

@@ -56,8 +56,9 @@ capture.onMarquee = (box) => {
 
 let framed = false;
 store.subscribe((s) => {
-  sheet.visible = s.view.showSheet;
-  sheet.place(s.view.plane, s.view.offset);
+  sheet.visible = s.view.showSheet && s.view.workplaneMode !== "face";
+  if (s.view.workplaneMode === "view") sheet.placeFrame(viewport.viewFrame(s.view.offset));
+  else sheet.place(s.view.plane, s.view.offset);
   strokes.visible = s.view.showStrokes;
   strokes.halfWidth = 2.2 / Math.max(1e-6, viewport.pixelsPerUnit());
   strokes.sync(s.doc.strokes, new Set(s.selection.strokes));
@@ -71,6 +72,9 @@ store.subscribe((s) => {
 
 // keep stroke ribbons at a constant screen width while zooming
 viewport.addFrameHook(() => {
+  if (store.get().view.workplaneMode === "view") {
+    sheet.placeFrame(viewport.viewFrame(store.get().view.offset));
+  }
   const want = 2.2 / Math.max(1e-6, viewport.pixelsPerUnit());
   if (Math.abs(want - strokes.halfWidth) / (strokes.halfWidth || 1) > 0.08) {
     strokes.halfWidth = want;
@@ -165,6 +169,8 @@ mountPanel({
   },
 });
 
+byId("panel-toggle").addEventListener("click", () => byId("panel").classList.toggle("open"));
+
 function frameAll(): void {
   const box = display.bounds();
   for (const mesh of strokes.meshes()) box.expandByObject(mesh);
@@ -194,6 +200,18 @@ window.addEventListener("keydown", (e) => {
   switch (e.key.toLowerCase()) {
     case "d":
       store.patchView({ tool: "draw" });
+      break;
+    case "o":
+      store.patchView({ tool: "orbit" });
+      break;
+    case "l":
+      store.patchView({ tool: "line" });
+      break;
+    case "r":
+      store.patchView({ tool: "rect" });
+      break;
+    case "c":
+      store.patchView({ tool: "circle" });
       break;
     case "v":
       store.patchView({ tool: "select" });

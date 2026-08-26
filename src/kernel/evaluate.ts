@@ -94,7 +94,7 @@ export class Evaluator {
 
   evaluate(nodes: OpNode[], strokes: Stroke[]): EvalResult {
     const byId = new Map(strokes.map((s) => [s.id, s]));
-    const sHash = hashOf(strokes.map((s) => [s.id, s.plane, s.offset, s.closed, s.pts]));
+    const sHash = hashOf(strokes.map((s) => [s.id, s.plane, s.offset, s.frame, s.closed, s.pts]));
     if (sHash !== this.strokeHash) {
       this.frames = [];
       this.strokeHash = sHash;

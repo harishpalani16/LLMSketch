@@ -1,4 +1,4 @@
-import type { Pt2, PlaneKey, Stroke, StrokeMetrics } from "../core/types.ts";
+import type { Pt2, PlaneKey, SketchFrame, Stroke, StrokeMetrics } from "../core/types.ts";
 import { to3D } from "../core/planes.ts";
 
 export const dist2 = (p: Pt2, q: Pt2): number => Math.hypot(p.a - q.a, p.b - q.b);
@@ -171,10 +171,16 @@ export class OneEuro {
   }
 }
 
-export function strokeMetrics(pts: Pt2[], closed: boolean, plane: PlaneKey, offset: number): StrokeMetrics {
+export function strokeMetrics(
+  pts: Pt2[],
+  closed: boolean,
+  plane: PlaneKey,
+  offset: number,
+  frame?: SketchFrame,
+): StrokeMetrics {
   const bb = bbox2(pts);
   const c = centroid2(pts);
-  const c3 = to3D(c, plane, offset);
+  const c3 = to3D(c, plane, offset, frame);
   return {
     w: bb.maxA - bb.minA,
     h: bb.maxB - bb.minB,
@@ -185,7 +191,7 @@ export function strokeMetrics(pts: Pt2[], closed: boolean, plane: PlaneKey, offs
 }
 
 export function recomputeMetrics(s: Stroke): Stroke {
-  return { ...s, metrics: strokeMetrics(s.pts, s.closed, s.plane, s.offset) };
+  return { ...s, metrics: strokeMetrics(s.pts, s.closed, s.plane, s.offset, s.frame) };
 }
 
 export function bboxDiagonal(pts: Pt2[]): number {

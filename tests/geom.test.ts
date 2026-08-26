@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { PLANE_KEYS, PLANES, cross, offsetOf, to2D, to3D } from "../src/core/planes.ts";
 import { alignRings, polylineLength, rdp, resample, shoelace } from "../src/sketch/geom.ts";
 import { beautify } from "../src/sketch/beautify.ts";
-import type { Pt2 } from "../src/core/types.ts";
+import type { Pt2, SketchFrame } from "../src/core/types.ts";
 
 /** SPEC tests 1-5: the verified sketch invariants. */
 
@@ -50,6 +50,20 @@ describe("2. to2D / to3D round-trip", () => {
         }
       }
     }
+  });
+
+  it("round-trips an arbitrary saved sketch frame", () => {
+    const frame: SketchFrame = {
+      u: [Math.SQRT1_2, 0, -Math.SQRT1_2],
+      v: [0, 1, 0],
+      n: [Math.SQRT1_2, 0, Math.SQRT1_2],
+      origin: [4, 7, -3],
+    };
+    const local = { a: 8.25, b: -2.5 };
+    const world = to3D(local, "ground", 0, frame);
+    const back = to2D(world, "ground", frame);
+    expect(back.a).toBeCloseTo(local.a, 9);
+    expect(back.b).toBeCloseTo(local.b, 9);
   });
 });
 

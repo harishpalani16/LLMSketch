@@ -1,22 +1,26 @@
 /* SPEC §13 -- blueprint / cyanotype. */
 :root {
-  --ground: #0f1729;
-  --ground-2: #162034;
-  --ground-3: #1d2a44;
-  --line: #2c3c5c;
-  --chalk: #e9eef6;
-  --chalk-dim: #8598b8;
-  --chalk-faint: #556b90;
-  --cyan: #5ac8e0;
+  --ground: #101722;
+  --ground-2: #151e2b;
+  --ground-3: #1d2938;
+  --ground-raised: #223044;
+  --line: #2b3a4e;
+  --line-strong: #3a4c63;
+  --chalk: #f4f6f8;
+  --chalk-dim: #a7b4c5;
+  --chalk-faint: #718198;
+  --cyan: #60d5e8;
+  --cyan-soft: rgba(96, 213, 232, 0.12);
   --redline: #e4572e;
   --plaster: #e9e2d4;
 
-  --label: "Barlow Condensed", "Oswald", "Arial Narrow", system-ui, sans-serif;
+  --label: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
-  --rail: 56px;
-  --panel: 320px;
-  --radius: 3px;
+  --topbar: calc(58px + env(safe-area-inset-top, 0px));
+  --rail: 144px;
+  --panel: 360px;
+  --radius: 8px;
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 

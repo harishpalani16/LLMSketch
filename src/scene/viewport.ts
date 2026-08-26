@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import type { ViewKey } from "../state.ts";
 import type { Vec3 } from "../core/planes.ts";
+import type { SketchFrame } from "../core/types.ts";
 
 /**
  * Four views with animated transitions and per-view up vectors (SPEC §15 P0).
@@ -87,6 +88,21 @@ export class Viewport {
     return this.dir.clone().negate();
   }
 
+  /** Screen-aligned drawing frame through the orbit target, offset toward the camera. */
+  viewFrame(offset = 0): SketchFrame {
+    const n = this.dir.clone().normalize();
+    const forward = n.clone().negate();
+    const u = new THREE.Vector3().crossVectors(forward, this.up).normalize();
+    const v = new THREE.Vector3().crossVectors(n, u).normalize();
+    const origin = this.target.clone().addScaledVector(n, offset);
+    return {
+      u: [u.x, u.y, u.z],
+      v: [v.x, v.y, v.z],
+      n: [n.x, n.y, n.z],
+      origin: [origin.x, origin.y, origin.z],
+    };
+  }
+
   setView(view: ViewKey, focus?: THREE.Vector3): void {
     const preset = PRESETS[view];
     this.view = view;
@@ -113,8 +129,8 @@ export class Viewport {
     this.invalidate();
   }
 
-  orbit(dx: number, dy: number): void {
-    if (this.locked) return;
+  orbit(dx: number, dy: number, force = false): void {
+    if (this.locked && !force) return;
     const spherical = new THREE.Spherical().setFromVector3(this.dir);
     spherical.theta -= dx * 0.008;
     spherical.phi = Math.min(Math.PI - 0.05, Math.max(0.05, spherical.phi - dy * 0.008));

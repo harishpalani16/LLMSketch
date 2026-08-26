@@ -1,6 +1,6 @@
 import * as THREE from "three";
-import type { PlaneKey, Pt2, Stroke, SubRef } from "../core/types.ts";
-import { PLANES } from "../core/planes.ts";
+import type { PlaneKey, Pt2, SketchFrame, Stroke, SubRef } from "../core/types.ts";
+import { basisFromNormal, PLANES } from "../core/planes.ts";
 import { store } from "../state.ts";
 import { kernel } from "../kernel/api.ts";
 import { nextStrokeId } from "../graph/model.ts";
@@ -24,10 +24,17 @@ const RDP_EPS_PX = 1.6;
 
 type Drag =
   | { kind: "none" }
-  | { kind: "draw"; plane: PlaneKey; offset: number }
-  | { kind: "orbit"; x: number; y: number }
+  | {
+      kind: "draw";
+      plane: PlaneKey;
+      offset: number;
+      mode: "draw" | "line" | "rect" | "circle";
+      start?: Pt2;
+      frame?: SketchFrame;
+    }
+  | { kind: "orbit"; x: number; y: number; force: boolean }
   | { kind: "pan"; x: number; y: number }
-  | { kind: "move"; ids: string[]; plane: PlaneKey; offset: number; last: Pt2 }
+  | { kind: "move"; ids: string[]; plane: PlaneKey; offset: number; frame?: SketchFrame; last: Pt2 }
   | { kind: "pushpull"; solid: string; select: string; normal: THREE.Vector3; origin: THREE.Vector3 }
   | { kind: "marquee"; from: { x: number; y: number } };
 
@@ -36,7 +43,11 @@ export class SketchCapture {
   private live: Pt2[] = [];
   private filterA = new OneEuro(1.0, 0.007);
   private filterB = new OneEuro(1.0, 0.007);
-  private penActive = false;
+  private penPointers = new Set<number>();
+  private touches = new Map<number, { x: number; y: number }>();
+  private ignoredTouchPointers = new Set<number>();
+  private gestureTouches = new Set<number>();
+  private touchGesture: { distance: number; x: number; y: number } | null = null;
   private previewDistance = 0;
   private pendingFace: Promise<SubRef | null> | null = null;
 
@@ -66,8 +77,27 @@ export class SketchCapture {
 
 
   private onDown = (e: PointerEvent): void => {
-    if (e.pointerType === "pen") this.penActive = true;
-    if (e.pointerType === "touch" && this.penActive) return;
+    if (e.pointerType === "pen") {
+      this.penPointers.add(e.pointerId);
+      if (this.touches.size) {
+        for (const id of this.touches.keys()) this.ignoredTouchPointers.add(id);
+        this.touches.clear();
+        this.touchGesture = null;
+        this.cancelDirectGesture();
+      }
+    }
+    if (e.pointerType === "touch") {
+      if (this.penPointers.size) {
+        this.ignoredTouchPointers.add(e.pointerId);
+        return;
+      }
+      this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (this.touches.size >= 2) {
+        this.beginTouchGesture();
+        this.canvas.setPointerCapture(e.pointerId);
+        return;
+      }
+    }
     this.canvas.setPointerCapture(e.pointerId);
 
     const camera = e.button === 1 || (e.button === 0 && e.shiftKey && e.altKey);
@@ -76,24 +106,35 @@ export class SketchCapture {
       return;
     }
     if (e.button === 2 || (e.button === 0 && e.altKey)) {
-      this.drag = { kind: "orbit", x: e.clientX, y: e.clientY };
+      this.drag = { kind: "orbit", x: e.clientX, y: e.clientY, force: false };
       return;
     }
     if (e.button !== 0) return;
 
     const tool = this.view.tool;
-    if (tool === "draw") this.startDraw(e);
+    if (tool === "orbit") {
+      store.patchView({ camera: "iso" });
+      this.drag = { kind: "orbit", x: e.clientX, y: e.clientY, force: true };
+    } else if (tool === "draw" || tool === "line" || tool === "rect" || tool === "circle") this.startDraw(e);
     else if (tool === "erase") this.eraseAt(e);
     else if (tool === "pushpull") void this.startPushPull(e);
     else this.selectAt(e);
   };
 
   private onMove = (e: PointerEvent): void => {
-    if (e.pointerType === "touch" && this.penActive) return;
+    if (e.pointerType === "touch") {
+      if (this.ignoredTouchPointers.has(e.pointerId)) return;
+      if (this.penPointers.size) return;
+      if (this.touches.has(e.pointerId)) this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (this.touchGesture) {
+        this.updateTouchGesture();
+        return;
+      }
+    }
     switch (this.drag.kind) {
       case "orbit":
-        this.viewport.orbit(e.clientX - this.drag.x, e.clientY - this.drag.y);
-        this.drag = { kind: "orbit", x: e.clientX, y: e.clientY };
+        this.viewport.orbit(e.clientX - this.drag.x, e.clientY - this.drag.y, this.drag.force);
+        this.drag = { kind: "orbit", x: e.clientX, y: e.clientY, force: this.drag.force };
         return;
       case "pan":
         this.viewport.pan(e.clientX - this.drag.x, e.clientY - this.drag.y);
@@ -117,13 +158,72 @@ export class SketchCapture {
   };
 
   private onUp = (e: PointerEvent): void => {
-    if (this.drag.kind === "draw") this.commitDraw(this.drag.plane, this.drag.offset);
+    if (e.pointerType === "pen") this.penPointers.delete(e.pointerId);
+    if (e.pointerType === "touch") {
+      if (this.ignoredTouchPointers.delete(e.pointerId)) return;
+      this.touches.delete(e.pointerId);
+      if (this.gestureTouches.has(e.pointerId)) {
+        this.gestureTouches.delete(e.pointerId);
+        if (this.touches.size < 2) this.touchGesture = null;
+        if (!this.gestureTouches.size) this.onStatus("ready");
+        if (this.canvas.hasPointerCapture(e.pointerId)) this.canvas.releasePointerCapture(e.pointerId);
+        return;
+      }
+    }
+    if (this.drag.kind === "draw")
+      this.commitDraw(this.drag.plane, this.drag.offset, false, this.drag.mode, this.drag.frame);
     else if (this.drag.kind === "pushpull") this.commitPushPull();
     else if (this.drag.kind === "move") store.endGesture();
     else if (this.drag.kind === "marquee") this.commitMarquee(e);
     this.drag = { kind: "none" };
     if (this.canvas.hasPointerCapture(e.pointerId)) this.canvas.releasePointerCapture(e.pointerId);
   };
+
+  private beginTouchGesture(): void {
+    this.cancelDirectGesture();
+    for (const id of this.touches.keys()) this.gestureTouches.add(id);
+    const pair = this.touchPair();
+    if (!pair) return;
+    this.touchGesture = pair;
+    this.onStatus("two fingers — pan and pinch to zoom");
+  }
+
+  private updateTouchGesture(): void {
+    const next = this.touchPair();
+    const previous = this.touchGesture;
+    if (!next || !previous) return;
+    this.viewport.pan(next.x - previous.x, next.y - previous.y);
+    if (next.distance > 1 && previous.distance > 1) {
+      this.viewport.zoom(Math.log(previous.distance / next.distance) / 0.0016);
+    }
+    this.touchGesture = next;
+  }
+
+  private touchPair(): { distance: number; x: number; y: number } | null {
+    const [a, b] = [...this.touches.values()];
+    if (!a || !b) return null;
+    return {
+      distance: Math.hypot(b.x - a.x, b.y - a.y),
+      x: (a.x + b.x) / 2,
+      y: (a.y + b.y) / 2,
+    };
+  }
+
+  private cancelDirectGesture(): void {
+    if (this.drag.kind === "draw") {
+      this.live = [];
+      this.strokes.clearLive();
+      this.pendingFace = null;
+    } else if (this.drag.kind === "move") {
+      store.endGesture();
+    } else if (this.drag.kind === "marquee") {
+      this.onMarquee(null);
+    } else if (this.drag.kind === "pushpull") {
+      this.onPushPullPreview(0);
+    }
+    this.drag = { kind: "none" };
+    this.viewport.invalidate();
+  }
 
   private onWheel = (e: WheelEvent): void => {
     e.preventDefault();
@@ -140,7 +240,7 @@ export class SketchCapture {
    */
   private faceTarget(
     e: PointerEvent,
-  ): { plane: PlaneKey; offset: number; solid: string } | null {
+  ): { plane: PlaneKey; offset: number; solid: string; frame?: SketchFrame } | null {
     const caster = this.viewport.raycaster(e.clientX, e.clientY);
     const hits = caster.intersectObjects(this.display.meshes(), false);
     const first = hits[0];
@@ -157,7 +257,18 @@ export class SketchCapture {
         best = key;
       }
     }
-    if (!best) return null;
+    if (!best) {
+      const basis = basisFromNormal([n.x, n.y, n.z]);
+      return {
+        plane: this.view.plane,
+        offset: 0,
+        solid: id,
+        frame: {
+          ...basis,
+          origin: [first.point.x, first.point.y, first.point.z],
+        },
+      };
+    }
     const pn = PLANES[best].n;
     const offset = first.point.x * pn[0] + first.point.y * pn[1] + first.point.z * pn[2];
     return { plane: best, offset: Math.round(offset * 1000) / 1000, solid: id };
@@ -165,22 +276,27 @@ export class SketchCapture {
 
   private startDraw(e: PointerEvent): void {
     const onSolid = this.faceTarget(e);
+    if (this.view.workplaneMode === "face" && !onSolid) {
+      this.onStatus("start the sketch on a model face");
+      return;
+    }
     const plane = onSolid?.plane ?? this.view.plane;
-    const offset = onSolid?.offset ?? this.view.offset;
+    const frame = onSolid?.frame ?? (this.view.workplaneMode === "view" ? this.viewport.viewFrame(this.view.offset) : undefined);
+    const offset = frame ? 0 : (onSolid?.offset ?? this.view.offset);
 
-    if (isEdgeOn(plane, this.viewport)) {
+    if (isEdgeOn(plane, this.viewport, frame)) {
       this.onStatus("that plane is edge-on -- turn the view before drawing");
       return;
     }
 
     this.pendingFace = null;
     if (onSolid) {
-      const hitPoint = this.viewport
-        .screenToRay(e.clientX, e.clientY)
-        .intersectPlane(
-          new THREE.Plane(new THREE.Vector3(...PLANES[plane].n), -offset),
-          new THREE.Vector3(),
-        );
+      const n = frame?.n ?? PLANES[plane].n;
+      const origin = frame?.origin ?? [n[0] * offset, n[1] * offset, n[2] * offset];
+      const hitPoint = this.viewport.screenToRay(e.clientX, e.clientY).intersectPlane(
+        new THREE.Plane().setFromNormalAndCoplanarPoint(new THREE.Vector3(...n), new THREE.Vector3(...origin)),
+        new THREE.Vector3(),
+      );
       if (hitPoint) {
         const solid = onSolid.solid;
         this.pendingFace = kernel()
@@ -188,20 +304,47 @@ export class SketchCapture {
           .then((f) => (f ? { solid, kind: "face" as const, select: f.select } : null))
           .catch(() => null);
       }
-      store.patchView({ plane, offset });
-      this.sheet.place(plane, offset);
+      if (!frame) store.patchView({ plane, offset, workplaneMode: "axis" });
+      if (frame) this.sheet.placeFrame(frame);
+      else this.sheet.place(plane, offset);
     }
 
     this.filterA.reset();
     this.filterB.reset();
     this.live = [];
-    this.drag = { kind: "draw", plane, offset };
+    const mode = this.view.tool;
+    if (mode !== "draw" && mode !== "line" && mode !== "rect" && mode !== "circle") return;
+    this.drag = { kind: "draw", plane, offset, mode, frame };
     this.extendDraw(e);
   }
 
   private extendDraw(e: PointerEvent): void {
     if (this.drag.kind !== "draw") return;
-    const { plane, offset } = this.drag;
+    const { plane, offset, frame } = this.drag;
+    if (this.drag.mode !== "draw") {
+      const mode = this.drag.mode;
+      const raw = pointOnPlane(this.viewport, plane, offset, e.clientX, e.clientY, frame);
+      if (!raw) return;
+      const result = this.view.snap
+        ? snap(raw, {
+            strokes: store.get().doc.strokes,
+            plane,
+            offset,
+            frame,
+            ppu: this.viewport.pixelsPerUnit(),
+            gridStep: 0.5,
+            axisLock: e.shiftKey,
+            livePts: this.drag.start ? [this.drag.start] : [],
+          })
+        : { point: raw };
+      const point = result.point;
+      const start = this.drag.start ?? point;
+      this.drag = { ...this.drag, start };
+      this.live = primitivePoints(mode, start, point);
+      this.strokes.setLive(this.live, mode !== "line", plane, offset, frame);
+      this.viewport.invalidate();
+      return;
+    }
     const events =
       typeof e.getCoalescedEvents === "function" && e.getCoalescedEvents().length
         ? e.getCoalescedEvents()
@@ -214,7 +357,7 @@ export class SketchCapture {
       const t = ev.timeStamp / 1000;
       const sx = this.filterA.filter(ev.clientX, t);
       const sy = this.filterB.filter(ev.clientY, t);
-      const raw = pointOnPlane(this.viewport, plane, offset, sx, sy);
+      const raw = pointOnPlane(this.viewport, plane, offset, sx, sy, frame);
       if (!raw) continue;
       const filtered: Pt2 = { ...raw, w: ev.pressure > 0 ? ev.pressure : 0.5 };
       const result = this.view.snap
@@ -222,6 +365,7 @@ export class SketchCapture {
             strokes: store.get().doc.strokes,
             plane,
             offset,
+            frame,
             ppu: this.viewport.pixelsPerUnit(),
             gridStep: 0.5,
             axisLock: e.shiftKey,
@@ -233,16 +377,22 @@ export class SketchCapture {
       if (last && Math.hypot(point.a - last.a, point.b - last.b) < 1e-4) continue;
       this.live.push(point);
       if (result.kind === "close" && this.live.length > 8) {
-        this.commitDraw(plane, offset, true);
+        this.commitDraw(plane, offset, true, "draw", frame);
         this.drag = { kind: "none" };
         return;
       }
     }
-    this.strokes.setLive(this.live, false, plane, offset);
+    this.strokes.setLive(this.live, false, plane, offset, frame);
     this.viewport.invalidate();
   }
 
-  private commitDraw(plane: PlaneKey, offset: number, forceClosed = false): void {
+  private commitDraw(
+    plane: PlaneKey,
+    offset: number,
+    forceClosed = false,
+    mode: "draw" | "line" | "rect" | "circle" = "draw",
+    frame?: SketchFrame,
+  ): void {
     const pts = this.live;
     this.live = [];
     this.strokes.clearLive();
@@ -255,22 +405,24 @@ export class SketchCapture {
 
     const eps = RDP_EPS_PX / Math.max(1e-6, this.viewport.pixelsPerUnit());
     const simplified = rdp(pts, eps);
-    const fit = beautify(simplified, forceClosed);
-    const closed = forceClosed || (fit?.closed ?? false);
+    const fit = mode === "draw" ? beautify(simplified, forceClosed) : null;
+    const closed = mode === "rect" || mode === "circle" || forceClosed || (fit?.closed ?? false);
     const finalPts = fit ? fit.pts : simplified;
+    const kind = mode === "draw" ? (fit?.kind ?? "freehand") : mode;
 
     const doc = store.get().doc;
     const stroke: Stroke = {
       id: nextStrokeId(doc.strokes),
       plane,
       offset,
+      frame,
       pts: finalPts,
       closed,
-      kind: fit ? fit.kind : "freehand",
+      kind,
       order: doc.strokes.length,
       raw: fit ? simplified : undefined,
       fitted: fit ? true : undefined,
-      metrics: strokeMetrics(finalPts, closed, plane, offset),
+      metrics: strokeMetrics(finalPts, closed, plane, offset, frame),
     };
     store.addStroke(stroke);
     if (this.pendingFace) {
@@ -337,16 +489,16 @@ export class SketchCapture {
     const first = strokes[0];
     if (!first) return;
     // a multi-plane selection has no shared plane to drag in
-    if (strokes.some((s) => s.plane !== first.plane || s.offset !== first.offset)) return;
-    const at = pointOnPlane(this.viewport, first.plane, first.offset, e.clientX, e.clientY);
+    if (strokes.some((s) => !sameFrame(s, first))) return;
+    const at = pointOnPlane(this.viewport, first.plane, first.offset, e.clientX, e.clientY, first.frame);
     if (!at) return;
     store.beginGesture();
-    this.drag = { kind: "move", ids, plane: first.plane, offset: first.offset, last: at };
+    this.drag = { kind: "move", ids, plane: first.plane, offset: first.offset, frame: first.frame, last: at };
   }
 
   private dragMove(e: PointerEvent): void {
     if (this.drag.kind !== "move") return;
-    const at = pointOnPlane(this.viewport, this.drag.plane, this.drag.offset, e.clientX, e.clientY);
+    const at = pointOnPlane(this.viewport, this.drag.plane, this.drag.offset, e.clientX, e.clientY, this.drag.frame);
     if (!at) return;
     store.moveStrokes(this.drag.ids, at.a - this.drag.last.a, at.b - this.drag.last.b, {
       silent: true,
@@ -442,4 +594,30 @@ export class SketchCapture {
     });
     this.onStatus(`push/pull ${distance} m`);
   }
+}
+
+function primitivePoints(mode: "line" | "rect" | "circle", start: Pt2, end: Pt2): Pt2[] {
+  if (mode === "line") return [{ ...start }, { ...end }];
+  if (mode === "rect") {
+    return [
+      { ...start },
+      { a: end.a, b: start.b },
+      { ...end },
+      { a: start.a, b: end.b },
+    ];
+  }
+  const radius = Math.hypot(end.a - start.a, end.b - start.b);
+  return Array.from({ length: 48 }, (_, i) => {
+    const t = (i / 48) * Math.PI * 2;
+    return { a: start.a + Math.cos(t) * radius, b: start.b + Math.sin(t) * radius };
+  });
+}
+
+function sameFrame(a: Stroke, b: Stroke): boolean {
+  if (a.plane !== b.plane || Math.abs(a.offset - b.offset) > 1e-6) return false;
+  if (Boolean(a.frame) !== Boolean(b.frame)) return false;
+  if (!a.frame || !b.frame) return true;
+  const av = [...a.frame.n, ...a.frame.origin];
+  const bv = [...b.frame.n, ...b.frame.origin];
+  return av.every((value, i) => Math.abs(value - bv[i]!) < 1e-5);
 }

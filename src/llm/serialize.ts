@@ -20,7 +20,7 @@ function strokeRow(s: Stroke): string {
   const bits = [
     s.id,
     s.closed ? `closed ${s.kind}` : `open ${s.kind}`,
-    `${s.plane}@${r1(s.offset)}`,
+    `${s.frame ? `custom-view origin(${s.frame.origin.map(r1).join(",")}) normal(${s.frame.n.map(r1).join(",")})` : `${s.plane}@${r1(s.offset)}`}`,
     `#${s.order + 1}`,
     size,
     measure,
